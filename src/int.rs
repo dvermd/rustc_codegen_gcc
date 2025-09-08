@@ -286,8 +286,8 @@ impl<'a, 'gcc, 'tcx> Builder<'a, 'gcc, 'tcx> {
         };
 
         // TODO(antoyo): remove duplication with intrinsic?
-        let name = if self.is_native_int_type(lhs.get_type()) {
-            match oop {
+        if self.is_native_int_type(lhs.get_type()) {
+            let name = match oop {
                 OverflowOp::Add => match new_kind {
                     Int(I8) => "__builtin_add_overflow",
                     Int(I16) => "__builtin_add_overflow",
@@ -333,7 +333,20 @@ impl<'a, 'gcc, 'tcx> Builder<'a, 'gcc, 'tcx> {
 
                     _ => unreachable!(),
                 },
-            }
+            };
+            let intrinsic = self.context.get_builtin_function(name);
+            let res = self
+                .current_func()
+                // TODO(antoyo): is it correct to use rhs type instead of the parameter typ?
+                .new_local(self.location, rhs.get_type(), "binopResult")
+                .get_address(self.location);
+            let new_type = type_kind_to_gcc_type(new_kind);
+            let new_type = self.context.new_c_type(new_type);
+            let lhs = self.context.new_cast(self.location, lhs, new_type);
+            let rhs = self.context.new_cast(self.location, rhs, new_type);
+            let res = self.context.new_cast(self.location, res, new_type.make_pointer());
+            let overflow = self.overflow_call(intrinsic, &[lhs, rhs, res], None);
+            (res.dereference(self.location).to_rvalue(), overflow)
         } else {
             let (func_name, width) = match oop {
                 OverflowOp::Add => match new_kind {
@@ -354,22 +367,8 @@ impl<'a, 'gcc, 'tcx> Builder<'a, 'gcc, 'tcx> {
                     _ => unreachable!(),
                 },
             };
-            return self.operation_with_overflow(func_name, lhs, rhs, width);
-        };
-
-        let intrinsic = self.context.get_builtin_function(name);
-        let res = self
-            .current_func()
-            // TODO(antoyo): is it correct to use rhs type instead of the parameter typ?
-            .new_local(self.location, rhs.get_type(), "binopResult")
-            .get_address(self.location);
-        let new_type = type_kind_to_gcc_type(new_kind);
-        let new_type = self.context.new_c_type(new_type);
-        let lhs = self.context.new_cast(self.location, lhs, new_type);
-        let rhs = self.context.new_cast(self.location, rhs, new_type);
-        let res = self.context.new_cast(self.location, res, new_type.make_pointer());
-        let overflow = self.overflow_call(intrinsic, &[lhs, rhs, res], None);
-        (res.dereference(self.location).to_rvalue(), overflow)
+            self.operation_with_overflow(func_name, lhs, rhs, width)
+        }
     }
 
     /// Non-`__builtin_*` overflow operations with a `fn(T, T, &mut i32) -> T` signature.
